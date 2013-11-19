@@ -184,7 +184,7 @@ public class MailSink extends AbstractSink implements Configurable {
         for ( String field : subjectFields ) {
 
           try {
-            if ( field == "body" ) {
+            if ( field.equals("body") ) {
               value = new String( event.getBody() );
             } else {
               value = new String( headers.get(field) );
@@ -194,15 +194,13 @@ public class MailSink extends AbstractSink implements Configurable {
           }
 
           mailSubject = mailSubject.replace("%{" + field + "}", value);
-
-          logger.info("Value of field {} is {}", field, value );
         }
 
         String mailMessage = message;
         for ( String field : messageFields ) {
 
           try {
-            if ( field == "body" ) {
+            if ( field.equals("body") ) {
               value = new String( event.getBody() );
             } else {
               value = new String( headers.get(field) );
@@ -212,13 +210,7 @@ public class MailSink extends AbstractSink implements Configurable {
           }
 
           mailMessage = mailMessage.replace("%{" + field + "}", value);
-
-          logger.info("Value of field {} is {}", field, value );
         }
-
-        //String host = new String(headers.get("host") == null ? "" : headers.get("host"));
-        //String prod = new String(headers.get("producer"));
-        //String body = new String(event.getBody());
 
         mimeMessage.setSubject(mailSubject);
         mimeMessage.setText(mailMessage);

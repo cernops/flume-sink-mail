@@ -43,11 +43,19 @@ import org.apache.flume.sink.AbstractSink;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.regex.Pattern;
+import java.util.regex.Matcher;
+
+import java.util.List;
+import java.util.ArrayList;
+
 public class MailSink extends AbstractSink implements Configurable {
 
   public static final String HOSTNAME   = "hostname";
   public static final String SENDER     = "sender";
   public static final String RECIPIENTS = "recipients";
+  public static final String SUBJECT    = "subject";  
+  public static final String MESSAGE    = "message";
 
   public static final int    DEFAULT_PORT = 25;
 
@@ -55,6 +63,10 @@ public class MailSink extends AbstractSink implements Configurable {
   private String[] recipients;
   private String   host;
   private int      port;
+  private String   subject;
+  List<String>     subjectFields;
+  private String   message;
+  List<String>     messageFields;
 
   private static final Logger logger = LoggerFactory
       .getLogger(MailSink.class);
@@ -84,6 +96,34 @@ public class MailSink extends AbstractSink implements Configurable {
     }
     Preconditions.checkState(sender != null, "Missing Param:" + SENDER);
 
+    // Resolve message structure
+    if (StringUtils.isNotBlank(context.getString(SUBJECT))) {
+      subject = context.getString(SUBJECT);
+    }
+    Preconditions.checkState(subject != null, "Missing Param:" + SUBJECT);
+    
+    // Generate the messageFields collection
+    subjectFields = new ArrayList<String>();
+    Matcher m = Pattern.compile("%\\{(.*?)\\}").matcher(subject);
+    while (m.find()) {
+      subjectFields.add( m.group(1) );
+      logger.info("Parsing subject field: {}", m.group(1) );
+    }
+
+    // Resolve message structure
+    if (StringUtils.isNotBlank(context.getString(MESSAGE))) {
+      message = context.getString(MESSAGE);
+    }
+    Preconditions.checkState(message != null, "Missing Param:" + MESSAGE);
+    
+    // Generate the messageFields collection
+    messageFields = new ArrayList<String>();
+    m = Pattern.compile("%\\{(.*?)\\}").matcher(message);
+    while (m.find()) {
+      messageFields.add( m.group(1) );
+      logger.info("Parsing message field: {}", m.group(1) );
+    }
+
   }
 
   @Override
@@ -110,40 +150,83 @@ public class MailSink extends AbstractSink implements Configurable {
 
     try {
       
-      // Get system properties
-      Properties properties = System.getProperties();
-
-      // Setup mail server
-      properties.setProperty("mail.smtp.host", host);
-      properties.put("mail.smtp.port", port);
-
-      // Get the default Session object.
-      Session session = Session.getDefaultInstance(properties);
-
-      // Create a default MimeMessage object.
-      MimeMessage message = new MimeMessage(session);
-
-      // Set From: header field of the header.
-      message.setFrom(new InternetAddress(sender));
-
-      // Set To: header field of the header.
-      for(String recipient : recipients) {
-        message.addRecipient(Message.RecipientType.TO, new InternetAddress(recipient));
-      }
-
-      // Now set the subject and actual message
       Event event = ch.take();
-      Map<String, String> headers = event.getHeaders();
 
-      String host = new String(headers.get("host") == null ? "" : headers.get("host"));
-      String prod = new String(headers.get("producer"));
-      String body = new String(event.getBody());
+      if ( event != null ) {
 
-      message.setSubject("Flume <" + host + "> " + prod);
-      message.setText(body);
+        // Get system properties
+        Properties properties = System.getProperties();
 
-      // Send message
-      Transport.send(message);
+        // Setup mail server
+        properties.setProperty("mail.smtp.host", host);
+        properties.put("mail.smtp.port", port);
+
+        // Get the default Session object.
+        Session session = Session.getDefaultInstance(properties);
+
+        // Create a default MimeMessage object.
+        MimeMessage mimeMessage = new MimeMessage(session);
+
+        // Set From: header field of the header.
+        mimeMessage.setFrom(new InternetAddress(sender));
+
+        // Set To: header field of the header.
+        for(String recipient : recipients) {
+          mimeMessage.addRecipient(Message.RecipientType.TO, new InternetAddress(recipient));
+        }
+
+        // Now set the subject and actual message
+        Map<String, String> headers = event.getHeaders();
+
+        String value;
+
+        String mailSubject = subject;
+        for ( String field : subjectFields ) {
+
+          try {
+            if ( field == "body" ) {
+              value = new String( event.getBody() );
+            } else {
+              value = new String( headers.get(field) );
+            }
+          } catch (NullPointerException t) {
+            value = "";
+          }
+
+          mailSubject = mailSubject.replace("%{" + field + "}", value);
+
+          logger.info("Value of field {} is {}", field, value );
+        }
+
+        String mailMessage = message;
+        for ( String field : messageFields ) {
+
+          try {
+            if ( field == "body" ) {
+              value = new String( event.getBody() );
+            } else {
+              value = new String( headers.get(field) );
+            }
+          } catch (NullPointerException t) {
+            value = "";
+          }
+
+          mailMessage = mailMessage.replace("%{" + field + "}", value);
+
+          logger.info("Value of field {} is {}", field, value );
+        }
+
+        //String host = new String(headers.get("host") == null ? "" : headers.get("host"));
+        //String prod = new String(headers.get("producer"));
+        //String body = new String(event.getBody());
+
+        mimeMessage.setSubject(mailSubject);
+        mimeMessage.setText(mailMessage);
+
+        // Send message
+        Transport.send(mimeMessage);
+
+      }
 
       txn.commit();
       status = Status.READY;
